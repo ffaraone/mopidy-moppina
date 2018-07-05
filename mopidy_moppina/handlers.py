@@ -43,23 +43,44 @@ class HttpHandler(tornado.web.RequestHandler):
 
     @tornado.web.asynchronous
     def post(self, *args, **kwargs):
+
         def fix_spotifyweb_uris(uri):
             if uri.startswith('spotifyweb:') and uri.count(':') >= 2:
                 return ':'.join(['spotify'] + uri.rsplit(':', 2)[1:])
             return uri
+
+        def chunks(uris, size):
+            idx = 0
+            while idx < len(uris):
+                yield uris[idx:idx+size]
+                idx += size 
+        
         logger.info('Moppina: search for images')
 
-        uris = json.loads(self.request.body.decode('utf-8'))
+        req = json.loads(self.request.body.decode('utf-8'))
+        uris = req.get('uris', [])
+        
+        # remove toptrack sauce from spotifyweb uris
+        uris = filter(lambda x: 'spotifyweb:sauce:artist-toptracks' not in x, uris)
+        # remove other kind of sauce from spotifyweb uris
         uris = map(fix_spotifyweb_uris, uris)
-        images = self.core.library.get_images(uris).get()
+
+        
         results = {}
-        to_query = uris
-        if len(images) > 0:
-            results, to_query = self.process_mop_images_response(images)
+        to_query = []
+        
+        for c in chunks(uris, 10):
+            images = self.core.library.get_images(c).get()
+            r, q = self.process_mop_images_response(images)
+            results.update(r)
+            to_query.extend(q)
         if len(to_query) > 0:
-            tracks = self.core.library.lookup(uris=to_query).get()
-            logger.info('*' * 50)
-            logger.info(tracks)
-            logger.info('*' * 50)
+            for uri in to_query:
+                lookup_results = self.core.library.lookup(uri=uri).get()
+                # logger.info('*' * 50)
+                # logger.info('lookup results %s', lookup_results) 
+                # # for uri, tracks in lookup_results.iteritems():
+                # #     logger.info('%s %s', uri, pformat(tracks))
+                # logger.info('*' * 50)
         self.write(results)
         self.finish()
